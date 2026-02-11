@@ -1,78 +1,85 @@
 import torch
 from datasets import load_dataset
 from tqdm import tqdm
-import tracer  # 导入我们在上一步写的 tracer.py
+import tracer
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
 
 # === 配置 ===
-OUTPUT_FILE = "mbpp_traces.pt"
-MAX_SAMPLES = None # 设置为 None 则跑全量，设置为 10 可以快速测试
+OUTPUT_FILE = "mbpp_traces_v2.pt"
+MAX_SAMPLES = None 
+NUM_WORKERS = 16  # <--- 并行数量，A40机器通常CPU核心很多，拉满！
 
 def format_state(vars_dict):
-    """
-    把变量字典转成字符串，方便后续 Tokenizer 处理
-    例如: {'x': 1, 'y': 2} -> "x: 1, y: 2"
-    """
-    if not vars_dict:
-        return "<empty>"
-    # 排序保证顺序一致性
+    if not vars_dict: return "<empty>"
     items = sorted(vars_dict.items())
     return ", ".join([f"{k}: {v}" for k, v in items])
 
-def main():
-    # 1. 加载数据
-    print("Loading MBPP dataset...")
-    dataset = load_dataset("mbpp", "sanitized", split="test", trust_remote_code=True)
-    
-    all_training_data = []
-    success_count = 0
-    
-    # 2. 遍历每个函数
-    # 如果你想快速测试，可以用 dataset.select(range(10))
-    iterable_dataset = dataset if MAX_SAMPLES is None else dataset.select(range(MAX_SAMPLES))
-
-    print(f"Start tracing {len(iterable_dataset)} functions...")
-    
-    for sample in tqdm(iterable_dataset):
-        # 拼接代码：函数定义 + 第一个测试用例
-        # 这样 exec() 才会真正运行函数逻辑
+def process_single_sample(sample):
+    """
+    单个样本的处理逻辑，为了并行化，必须封装成独立的函数
+    """
+    try:
         full_code = sample['code'] + "\n" + sample['test_list'][0]
+        code_lines = full_code.splitlines()
         
-        # 运行沙盒追踪
+        # 这一步最耗时，现在它会在独立的 CPU 核心上跑
         traces = tracer.trace_execution(full_code)
         
-        # 如果追踪结果少于2步，说明没跑起来或者报错了，跳过
-        if len(traces) < 2:
-            continue
+        if len(traces) < 2: 
+            return []
             
-        success_count += 1
-        
-        # 3. 构建 (Current Line, Previous State) -> (Next State) 样本对
-        # 我们从第1步遍历到最后一步
+        sample_data = []
         for i in range(1, len(traces)):
             prev_step = traces[i-1]
             curr_step = traces[i]
             
-            # 获取当前行的代码文本
-            # full_code 是字符串，我们需要按换行符切分来找行号
-            # 注意：tracer 返回的 lineno 是绝对行号，这比较麻烦
-            # 为了简化 MVP，我们暂时只存 State 转换，假设模型能通过 Embedding 知道是哪一行
-            # 或者我们简单地存一下行号，以后再通过 Encoder 找对应代码
-            
+            line_idx = curr_step['lineno'] - 1
+            if 0 <= line_idx < len(code_lines):
+                code_text = code_lines[line_idx].strip()
+            else:
+                continue
+
+            if not code_text or code_text.startswith('#'):
+                continue
+
             data_point = {
-                "task_id": sample['task_id'],
-                "lineno": curr_step['lineno'],
                 "prev_state": format_state(prev_step['vars']),
+                "code": code_text,
                 "next_state": format_state(curr_step['vars'])
             }
-            all_training_data.append(data_point)
+            sample_data.append(data_point)
+            
+        return sample_data
+    except Exception:
+        return []
 
-    # 4. 保存结果
-    print(f"-" * 30)
-    print(f"Tracing finished!")
-    print(f"Successfully traced functions: {success_count}/{len(iterable_dataset)}")
-    print(f"Total training samples generated: {len(all_training_data)}")
+def main():
+    # 强制设置环境变量，防止 fork 后丢失
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     
-    print(f"Saving to {OUTPUT_FILE}...")
+    print("Loading MBPP dataset...")
+    # cache_dir 指定到系统盘，避开 RunPod 的慢速网络盘
+    dataset = load_dataset("mbpp", "sanitized", split="test", trust_remote_code=True, cache_dir="/root/.cache/huggingface")
+    
+    all_training_data = []
+    iterable_dataset = dataset if MAX_SAMPLES is None else dataset.select(range(MAX_SAMPLES))
+    total_samples = len(iterable_dataset)
+
+    print(f"Generating Phase 2 Data with {NUM_WORKERS} workers...")
+    
+    # === 并行处理核心 ===
+    with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
+        # 提交所有任务
+        futures = [executor.submit(process_single_sample, sample) for sample in iterable_dataset]
+        
+        # 使用 tqdm 显示进度
+        for future in tqdm(as_completed(futures), total=total_samples, desc="Tracing"):
+            result = future.result()
+            if result:
+                all_training_data.extend(result)
+
+    print(f"Saving {len(all_training_data)} samples to {OUTPUT_FILE}...")
     torch.save(all_training_data, OUTPUT_FILE)
     print("Done.")
 
