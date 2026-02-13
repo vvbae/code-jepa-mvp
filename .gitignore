@@ -228,4 +228,6 @@ checkpoints/
 eb_jepa_ICLR/
 arxiv/
 arxiv_tmp/
-CLAUDE.md
+
+
+*.pt
