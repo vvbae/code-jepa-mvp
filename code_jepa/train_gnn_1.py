@@ -21,7 +21,7 @@ CONFIG = {
     "epochs": 10,
     "ema_decay": 0.996,
     "log_every": 10,
-    "data_file": "mbpp_graphs.pt",
+    "data_file": os.path.join(os.path.dirname(__file__), "mbpp_graphs.pt"),
     "model_name": "microsoft/codebert-base",
     "output_dir": "runs_jepa_vicreg",
 }
@@ -54,6 +54,8 @@ class VICRegLoss(nn.Module):
         # Covariance: Off-diagonal should be 0
         def off_diagonal_cov(z):
             n, d = z.size()
+            if n < 2:
+                return torch.tensor(0.0, device=z.device)
             z = z - z.mean(dim=0)
             cov = (z.T @ z) / (n - 1)
             off_diag = cov.pow(2).sum() - cov.diag().pow(2).sum()
@@ -165,57 +167,58 @@ def main():
     csv_path = os.path.join(run_dir, "train_log.csv")
 
     tokenizer = AutoTokenizer.from_pretrained(CONFIG["model_name"])
-    raw_data = torch.load(CONFIG["data_file"])
-    loader = DataLoader(JEPADataSet(raw_data, tokenizer), batch_size=CONFIG["batch_size"], shuffle=True)
+    raw_data = torch.load(CONFIG["data_file"], weights_only=False)
+    loader = DataLoader(JEPADataSet(raw_data, tokenizer), batch_size=CONFIG["batch_size"], shuffle=True, collate_fn=collate_fn)
 
     model = NeuroSymbolicJEPA().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=CONFIG["lr"])
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=CONFIG["lr"])
     criterion = VICRegLoss().to(device)
 
-    # 日志准备
     f = open(csv_path, "w", newline="")
-    writer = csv.writer(f)
-    writer.writerow(["epoch", "step", "loss", "inv_loss", "var_loss", "cov_loss", "norm"])
+    try:
+        writer = csv.writer(f)
+        writer.writerow(["epoch", "step", "loss", "inv_loss", "var_loss", "cov_loss", "norm"])
 
-    global_step = 0
-    for epoch in range(CONFIG["epochs"]):
-        model.train()
-        pbar = tqdm(loader, desc=f"Epoch {epoch+1}")
-        for p_g, n_g, c_ids, c_mask in pbar:
-            p_g, n_g, c_ids, c_mask = [x.to(device) for x in [p_g, n_g, c_ids, c_mask]]
+        global_step = 0
+        for epoch in range(CONFIG["epochs"]):
+            model.train()
+            pbar = tqdm(loader, desc=f"Epoch {epoch+1}")
+            for p_g, n_g, c_ids, c_mask in pbar:
+                p_g, n_g, c_ids, c_mask = [x.to(device) for x in [p_g, n_g, c_ids, c_mask]]
 
-            pred_z = model(p_g, c_ids, c_mask)
-            target_z = model.encode_target(n_g)
+                pred_z = model(p_g, c_ids, c_mask)
+                target_z = model.encode_target(n_g)
 
-            loss, inv_l, var_l, cov_l = criterion(pred_z, target_z)
+                loss, inv_l, var_l, cov_l = criterion(pred_z, target_z)
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            model.ema_update()
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                model.ema_update()
 
-            global_step += 1
-            if global_step % CONFIG["log_every"] == 0:
-                norm = pred_z.norm(dim=1).mean().item()
-                writer.writerow(
-                    [
-                        epoch + 1,
-                        global_step,
-                        f"{loss.item():.6f}",
-                        f"{inv_l.item():.6f}",
-                        f"{var_l.item():.6f}",
-                        f"{cov_l.item():.6f}",
-                        f"{norm:.4f}",
-                    ]
-                )
-                f.flush()
-                pbar.set_postfix(loss=f"{loss.item():.3f}", var=f"{var_l.item():.3f}", norm=f"{norm:.2f}")
+                global_step += 1
+                if global_step % CONFIG["log_every"] == 0:
+                    norm = pred_z.norm(dim=1).mean().item()
+                    writer.writerow(
+                        [
+                            epoch + 1,
+                            global_step,
+                            f"{loss.item():.6f}",
+                            f"{inv_l.item():.6f}",
+                            f"{var_l.item():.6f}",
+                            f"{cov_l.item():.6f}",
+                            f"{norm:.4f}",
+                        ]
+                    )
+                    f.flush()
+                    pbar.set_postfix(loss=f"{loss.item():.3f}", var=f"{var_l.item():.3f}", norm=f"{norm:.2f}")
 
-        # 每个 Epoch 结束后保存一次图表和模型
-        save_plots(csv_path, os.path.join(run_dir, "monitor.png"))
-        torch.save(model.state_dict(), os.path.join(run_dir, "last_model.pth"))
+            save_plots(csv_path, os.path.join(run_dir, "monitor.png"))
+            torch.save(model.state_dict(), os.path.join(run_dir, "last_model.pth"))
+    finally:
+        f.close()
 
-    f.close()
     print(f"Training Complete. Results in {run_dir}")
 
 

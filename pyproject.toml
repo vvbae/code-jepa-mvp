@@ -27,7 +27,8 @@ dependencies = [
     "tiktoken>=0.9.0",
     "torch==2.6.0",
     "torchcodec>=0.4.0",
-    "torchvision",
+    "torchvision==0.21.0",
+    "torchaudio==2.6.0",
     "wandb[media]>=0.21.1",
     "gymnasium>=1.1.1",
     "imageio",
@@ -40,6 +41,7 @@ dependencies = [
     "ruamel.yaml",
     "torch-geometric>=2.6.0",
     "transformers>=4.40.0",
+    "pandas",
 ]
 requires-python = "==3.12.*"
 
