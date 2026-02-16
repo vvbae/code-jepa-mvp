@@ -38,6 +38,10 @@ dependencies = [
     "decord",
     "omegaconf",
     "ruamel.yaml",
+    "datasets",
+    "tree-sitter",
+    "tree-sitter-python",
+    "torch-geometric",
 ]
 requires-python = "==3.12.*"
 
