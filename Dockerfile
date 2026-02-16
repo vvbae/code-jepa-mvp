@@ -25,16 +25,13 @@ RUN uv pip install --system \
     -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 
 RUN uv pip install --system \
-    "huggingface-hub>=0.23.0" \
-    "transformers" \
-    "datasets" \
-    "accelerate" \
     "einops>=0.8.1" \
     "fire>=0.7.0" \
+    "huggingface-hub>=0.33.2" \
     "matplotlib>=3.10.3" \
     "opencv-python>=4.12.0.88" \
     "pudb>=2025.1" \
-    "scikit-learn>=1.5.0" \
+    "scikit-learn>=1.7.0" \
     "tiktoken>=0.9.0" \
     "torchcodec>=0.4.0" \
     "wandb[media]>=0.21.1" \
@@ -46,9 +43,11 @@ RUN uv pip install --system \
     "pymunk" \
     "decord" \
     "omegaconf" \
+    "ruamel.yaml" \
+    "datasets" \
+    "transformers" \
     "tree-sitter" \
-    "tree-sitter-python" \
-    "ruamel.yaml"
+    "tree-sitter-python"
 
 RUN git config --global user.name "vvbae" && \
     git config --global user.email "polarsatellitest@gmail.com"
