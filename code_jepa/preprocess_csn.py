@@ -57,8 +57,22 @@ class CSNGraphProcessor:
 
     def process(self):
         print("Loading CodeSearchNet Python subset...")
+        import zipfile
+        from huggingface_hub import hf_hub_download
+
+        zip_path = hf_hub_download(
+            repo_id="code-search-net/code_search_net",
+            filename="data/python.zip",
+            repo_type="dataset",
+        )
+        extract_dir = "/tmp/csn_python"
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_dir)
+
+        import glob as _glob
+        train_files = _glob.glob(f"{extract_dir}/python/final/jsonl/train/*.jsonl.gz")
         dataset = load_dataset(
-            "code_search_net", "python", split="train", streaming=True
+            "json", data_files=train_files, split="train", streaming=True
         )
 
         count = 0
@@ -68,7 +82,7 @@ class CSNGraphProcessor:
             if count >= LIMIT:
                 break
 
-            code = entry["whole_func_string"]
+            code = entry["original_string"]
             x, edge_index = self.code_to_graph(code)
 
             if x is not None and x.size(0) > 1:
@@ -92,4 +106,3 @@ class CSNGraphProcessor:
 if __name__ == "__main__":
     processor = CSNGraphProcessor()
     processor.process()
-``

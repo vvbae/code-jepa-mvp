@@ -7,7 +7,7 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.loader import DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
@@ -71,14 +71,12 @@ class GNNEncoder(nn.Module):
         self.embed = nn.Embedding(num_types, 128)
         self.conv1 = GCNConv(128, 256)
         self.conv2 = GCNConv(256, out_dim)
-        self.bn = nn.BatchNorm1d(out_dim)
 
     def forward(self, data):
         x = self.embed(data.x.squeeze())
         x = F.gelu(self.conv1(x, data.edge_index))
         x = self.conv2(x, data.edge_index)
-        x = global_mean_pool(x, data.batch)
-        return self.bn(x)
+        return global_mean_pool(x, data.batch)
 
 
 class VICRegLoss(nn.Module):
@@ -120,7 +118,7 @@ def train():
     print(f"Working Directory: {run_dir}")
 
     # 数据准备
-    dataset = torch.load(GRAPH_DATA_PATH)
+    dataset = torch.load(GRAPH_DATA_PATH, weights_only=False)
     with open(VOCAB_PATH, "r") as f:
         num_types = len(json.load(f))
 
@@ -172,7 +170,7 @@ def train():
             # Loss 计算
             pred_loss = F.mse_loss(pred_z, target_z)
             inv_l, var_l = criterion(online_z, target_z)
-            total_loss = pred_loss + inv_l + var_l
+            total_loss = pred_loss + var_l
 
             optimizer.zero_grad()
             total_loss.backward()
